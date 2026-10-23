@@ -19,7 +19,7 @@ if let flag = CommandLine.arguments.firstIndex(of: "--vim") {
     exit(0)
 }
 
-// `Araso --settings [general|keys|apps|typing|learning|about]`: the settings window, started from the input menu.
+// `Araso --settings [general|keys|accents|apps|typing|learning|about]`: the settings window, started from the input menu.
 if let flag = CommandLine.arguments.firstIndex(of: "--settings") {
     let next = CommandLine.arguments.dropFirst(flag + 1).first
     MainActor.assumeIsolated { runSettingsApp(tab: next.flatMap(SettingsTab.init(rawValue:)) ?? .general) }
