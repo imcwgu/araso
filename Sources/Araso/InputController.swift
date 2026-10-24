@@ -32,10 +32,7 @@ final class InputController: IMKInputController {
     @MainActor private var session: InputSession {
         let runtime = Runtime.shared
         if let current, current.generation == runtime.generation { return current.session }
-        accentHold = nil
-        accentKeys = nil
-        suppressedAccentKey = nil
-        accentPanel?.hide()
+        cancelAccent()
         let fresh = runtime.makeSession()
         if let old = current?.session {
             old.commit(client: client().map { textClient($0 as IMKTextInput) })
@@ -69,6 +66,7 @@ final class InputController: IMKInputController {
         client?.overrideKeyboard(withKeyboardNamed: "com.apple.keylayout.US")
         let app = client?.bundleIdentifier()
         MainActor.assumeIsolated {
+            cancelAccent()
             Runtime.shared.active = self
             session.activate(app: app)
             session.replacements = Runtime.shared.textReplacements
@@ -84,16 +82,17 @@ final class InputController: IMKInputController {
     @MainActor func vimChanged(to signal: VimSignal, from app: String?) {
         let session = session
         guard app.map({ $0 == session.app }) ?? !session.policy.switchKeys.contains(.escape) else { return }
-        finishAccent(client: client(), selected: false)
+        cancelAccent(suppressRepeats: true)
         session.vimChanged(to: signal, client: client().map { textClient($0 as IMKTextInput) })
         log.debug("vim \(signal.rawValue, privacy: .public)")
     }
 
     override func deactivateServer(_ sender: Any!) {
         MainActor.assumeIsolated {
-            finishAccent(client: textInput(sender), selected: false)
+            cancelAccent()
             session.commit(client: textInput(sender).map(textClient))
             StripHUD.hide(force: true)
+            if Runtime.shared.active === self { Runtime.shared.active = nil }
             Runtime.shared.converter?.save()
         }
         super.deactivateServer(sender)
@@ -101,7 +100,7 @@ final class InputController: IMKInputController {
 
     override func commitComposition(_ sender: Any!) {
         MainActor.assumeIsolated {
-            finishAccent(client: textInput(sender), selected: false)
+            cancelAccent()
             session.commitForNewContext(client: textInput(sender).map(textClient))
             StripHUD.hide(force: true)
         }
@@ -130,14 +129,14 @@ final class InputController: IMKInputController {
             return MainActor.assumeIsolated {
                 if suppressedAccentKey == event.keyCode { suppressedAccentKey = nil }
                 guard accentHold?.keyCode == event.keyCode else { return false }
-                if accentHold?.release() == true { finishAccent(client: input, selected: false) }
+                if accentHold?.release() == true { cancelAccent(suppressRepeats: true) }
                 return true
             }
         }
         if event.type == .flagsChanged {
             MainActor.assumeIsolated {
                 if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-                    finishAccent(client: input, selected: false)
+                    cancelAccent(suppressRepeats: true)
                 }
                 // ⌘ going down: a held word goes in before the shortcut, since an app may act on
                 // the shortcut without showing it to the input method (Ghostty pastes on ⌘V itself).
@@ -157,6 +156,7 @@ final class InputController: IMKInputController {
         pauseTapDown = nil // a modifier with a key is a shortcut, not a tap
         switchTapDown = nil // ⌥ or ⇧ with a key types a character, not a tap
         if maskedField(input) {
+            MainActor.assumeIsolated { cancelAccent() }
             // A masked password field: the keys go to the app as typed, as when paused.
             log.debug("handle masked passed app=\(input.bundleIdentifier() ?? "?", privacy: .public)")
             return false
@@ -190,7 +190,7 @@ final class InputController: IMKInputController {
     @MainActor private func handleAccent(_ event: NSEvent, client input: IMKTextInput) -> Bool {
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
             suppressedAccentKey = nil
-            finishAccent(client: input, selected: false)
+            cancelAccent(suppressRepeats: true)
             return false
         }
         if suppressedAccentKey == event.keyCode, event.isARepeat { return true }
@@ -207,10 +207,10 @@ final class InputController: IMKInputController {
             if hold.isVisible, plain {
                 switch event.keyCode {
                 case KeyCode.returnKey, KeyCode.keypadEnter, KeyCode.space:
-                    finishAccent(client: input, selected: true)
+                    chooseAccent(client: input)
                     return true
                 case KeyCode.escape, KeyCode.delete:
-                    finishAccent(client: input, selected: false)
+                    cancelAccent(suppressRepeats: true)
                     return true
                 case KeyCode.left, KeyCode.up:
                     accentHold?.move(-1)
@@ -223,12 +223,12 @@ final class InputController: IMKInputController {
                 default:
                     if let digit = event.characters.flatMap(Int.init), (1...9).contains(digit) {
                         let index = hold.pageStart + digit - 1
-                        if accentHold?.select(index) == true { finishAccent(client: input, selected: true) }
+                        if accentHold?.select(index) == true { chooseAccent(client: input) }
                         return true
                     }
                 }
             }
-            finishAccent(client: input, selected: false)
+            cancelAccent(suppressRepeats: true)
         }
         return false
     }
@@ -246,18 +246,25 @@ final class InputController: IMKInputController {
         accentKeys = session.keys
     }
 
-    @MainActor private func finishAccent(client input: IMKTextInput?, selected: Bool) {
-        guard let hold = accentHold else { return }
-        let expectedKeys = accentKeys
+    /// Cancelling must be local: an old IMK client can be disappearing while the source changes.
+    /// No caret queries, session recreation, or candidate-window refresh belongs on this path.
+    @MainActor private func cancelAccent(suppressRepeats: Bool = false) {
+        let key = accentHold.flatMap { $0.isDown ? $0.keyCode : nil }
         accentHold = nil
         accentKeys = nil
+        suppressedAccentKey = suppressRepeats ? key : nil
         accentPanel?.hide()
-        if hold.isDown { suppressedAccentKey = hold.keyCode }
-        if selected, let input, let expectedKeys {
+    }
+
+    @MainActor private func chooseAccent(client input: IMKTextInput?) {
+        guard let hold = accentHold else { return }
+        let expectedKeys = accentKeys
+        cancelAccent(suppressRepeats: true)
+        if let input, let expectedKeys {
             _ = session.replaceLastLetterWithAccent(hold.accent, original: hold.letter,
                 expectedKeys: expectedKeys, client: textClient(input))
         }
-        syncAccent()
+        if let input { syncStrip(input) }
     }
 
     /// A masked password field has the focus (`MaskedField`). The system is asked only while
@@ -320,7 +327,7 @@ final class InputController: IMKInputController {
               Date().timeIntervalSince(down.at) < 0.5 else { return }
         switchTapDown = nil
         guard !session.inVimNormalMode else { return } // vim's own keys
-        finishAccent(client: client, selected: false)
+        cancelAccent(suppressRepeats: true)
         noteWordRect(client)
         let handled = session.handle(.cycle, client: textClient(client))
         syncStrip(client)
@@ -332,6 +339,7 @@ final class InputController: IMKInputController {
     /// then the strip says so for a moment. One panel shows them all, so this is the one place
     /// that decides which.
     @MainActor private func syncStrip(_ client: IMKTextInput) {
+        if accentHold?.isVisible == true { StripHUD.hide(force: true); return }
         if let conversion = session.conversion {
             StripHUD.show(conversion, clause: caretRect(client)) { [weak self] index in
                 guard let self, let input: IMKTextInput = self.client() else { return }
@@ -414,7 +422,7 @@ final class InputController: IMKInputController {
 
     /// Pauses or resumes this text field, and says so under the caret.
     @MainActor private func togglePause(client: IMKTextInput?) {
-        finishAccent(client: client, selected: false)
+        cancelAccent(suppressRepeats: true)
         session.togglePause(client: client.map(textClient))
         StripHUD.hide(force: true)
         PauseHUD.show(paused: session.paused, caret: client.map(caretRect) ?? .zero)
@@ -492,8 +500,8 @@ final class InputController: IMKInputController {
         StripHUD.hide(force: true)
         if accentPanel == nil { accentPanel = AccentPanel() }
         accentPanel?.show(hold, caret: client().map(caretRect) ?? .zero, choose: { [weak self] index in
-            guard let self, self.accentHold?.select(index) == true else { return }
-            self.finishAccent(client: self.client(), selected: true)
+            guard let self, Runtime.shared.active === self, self.accentHold?.select(index) == true else { return }
+            self.chooseAccent(client: self.client())
         }, move: { [weak self] offset in
             self?.accentHold?.movePage(offset)
             self?.syncAccent()

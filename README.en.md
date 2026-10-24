@@ -190,6 +190,8 @@ Does what the settings window does. Add `--delete-data` only to drop settings an
 
 </details>
 
+Pass `--check-server` to the installed app to check whether its input server responds. A settings window alone or an unresponsive server fails the check. It does not change the input source or replace a real typing test. If typing stops, switch to a built-in source such as 2-Set Korean or U.S.; if necessary, remove and re-add Araso in Keyboard settings or log out and back in. See [launch and switching checks](docs/input-server-checks.md).
+
 ## Keys
 
 **Press-and-hold characters**: by default, hold `a/o/u/s` until macOS starts key repeat to offer `ä/ö/ü/ß`. The original letter is composed immediately. Pausing after releasing a key does not open the menu; opening follows the macOS keyboard repeat delay. Shift/Caps Lock offers `Ä/Ö/Ü/ẞ`. A compact horizontal panel fits the candidate count. Move with arrows; choose with `1–9`, Return, Space, or a click. More than nine candidates use pages. Esc/Delete keeps the original letter; another key keeps it and continues typing.
