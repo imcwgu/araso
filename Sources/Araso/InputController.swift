@@ -679,7 +679,19 @@ private final class IMKClient: TextClient {
 
     func setMarkedText(_ text: String) {
         let length = (text as NSString).length
-        input.setMarkedText(text, selectionRange: NSRange(location: length, length: 0), replacementRange: Self.noRange)
+        input.setMarkedText(text, selectionRange: NSRange(location: length, length: 0), replacementRange: compositionRange)
+    }
+
+    /// Web fields can rebuild their DOM during composition: Safari still reports the marked
+    /// range, but an implicit replacement inserts at its reset caret instead. Name the marked
+    /// range explicitly for both preview updates and commits. With no marked text, preserve
+    /// the system's selection/replacement behavior (including clients with unknown positions).
+    private var compositionRange: NSRange {
+        let range = input.markedRange()
+        guard range.location != NSNotFound, range.length > 0,
+              range.length < NSNotFound, range.location >= 0,
+              range.location <= NSNotFound - range.length else { return Self.noRange }
+        return range
     }
 
     func setMarkedText(_ text: String, replacing range: NSRange) {
@@ -705,11 +717,11 @@ private final class IMKClient: TextClient {
             style(kTSMHiliteSelectedConvertedText, selected, segment: 0)
         }
         input.setMarkedText(marked, selectionRange: NSRange(location: whole.length, length: 0),
-                            replacementRange: range ?? Self.noRange)
+                            replacementRange: range ?? compositionRange)
     }
 
     func insertText(_ text: String, replacing range: NSRange?) {
-        input.insertText(text, replacementRange: range ?? Self.noRange)
+        input.insertText(text, replacementRange: range ?? compositionRange)
     }
 
     func selectedRange() -> NSRange { input.selectedRange() }

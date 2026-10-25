@@ -53,3 +53,17 @@ the screen or logging typed text. Restore the user's previous source after check
 If macOS logs `LaunchInputMethod() Error, status=-50` or `NO Endpoint`, keep the built-in source
 selected. Re-add the installed source or log out and back in to refresh the session's IMK state.
 Do not report the problem resolved merely because a manually launched server types once.
+
+## Web-field composition replacement
+
+Some web fields report a marked range while their selection has returned to its start. An
+implicit replacement (`NSNotFound`) can then insert each whole preview before the previous one.
+For example, typing `ein` produced `eineiㄷ`; Backspace added the shortened preview instead of
+removing the last character. The IMK adapter names a valid existing marked range explicitly for
+plain previews, clause previews, and commits. Caller-supplied replacement ranges still win.
+Unknown, empty, or invalid marked ranges retain the normal implicit-selection behavior.
+
+When testing a field that updates results on every input, establish that keys actually reach
+Araso first (`dkssud` should compose `안녕`). Then check `ein` → `einbau` → Backspace → `einba`,
+Return, complete deletion, and typing into an existing selection. Check a native text field too.
+Literal English input alone cannot establish success if the automation bypassed the input method.
